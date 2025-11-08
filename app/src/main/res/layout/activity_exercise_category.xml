@@ -285,7 +285,7 @@
         android:layout_width="wrap_content"
         android:layout_height="56dp"
         android:layout_marginTop="24dp"
-        android:background="@drawable/button_white"
+        app:backgroundTint="@android:color/white"
         android:paddingStart="48dp"
         android:paddingEnd="48dp"
         android:text="@string/back_to_home"
