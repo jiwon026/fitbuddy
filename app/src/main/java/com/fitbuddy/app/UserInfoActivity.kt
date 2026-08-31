@@ -172,20 +172,3 @@ class UserInfoActivity : AppCompatActivity() {
         return true
     }
 }
-
-/**
- * 백엔드 /user/info 에 맞춘 요청/응답 모델
- * (원하면 별도 파일로 분리해도 됨)
- */
-data class UserInfoRequest(
-    val email: String,
-    val height_cm: Int,
-    val weight_kg: Double,
-    val gender: String,
-    val workout_goal: String
-)
-
-data class UserInfoResponse(
-    val success: Boolean,
-    val message: String
-)
