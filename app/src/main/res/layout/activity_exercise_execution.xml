@@ -70,6 +70,7 @@
             android:padding="16dp">
 
             <!-- 카메라 뷰 카드 -->
+            <!-- 카메라 뷰 카드 -->
             <androidx.cardview.widget.CardView
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
@@ -77,12 +78,27 @@
                 app:cardCornerRadius="24dp"
                 app:cardElevation="8dp">
 
-                <androidx.camera.view.PreviewView
-                    android:id="@+id/camera_preview"
+                <FrameLayout
                     android:layout_width="match_parent"
-                    android:layout_height="400dp" />
+                    android:layout_height="400dp">
+
+                    <androidx.camera.view.PreviewView
+                        android:id="@+id/camera_preview"
+                        android:layout_width="match_parent"
+                        android:layout_height="match_parent"
+                        app:implementationMode="compatible"
+                        app:scaleType="fitCenter" />
+
+                    <com.fitbuddy.app.PoseOverlayView
+                        android:id="@+id/poseOverlay"
+                        android:layout_width="match_parent"
+                        android:layout_height="match_parent"
+                        android:background="@android:color/transparent" />
+
+                </FrameLayout>
 
             </androidx.cardview.widget.CardView>
+
 
             <!-- AI 피드백 카드 -->
             <androidx.cardview.widget.CardView

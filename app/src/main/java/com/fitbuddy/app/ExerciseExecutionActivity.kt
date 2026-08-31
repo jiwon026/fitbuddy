@@ -25,6 +25,8 @@ import java.io.ByteArrayOutputStream
 import java.util.Locale
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+import android.graphics.Matrix
+import kotlinx.coroutines.*
 
 class ExerciseExecutionActivity : AppCompatActivity() {
 
@@ -35,6 +37,8 @@ class ExerciseExecutionActivity : AppCompatActivity() {
     private var timeLeftInMillis: Long = 0
     private var isRunning = false
 
+    private val poseScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
     // 포즈 분석 관련
     private var lastPoseSentAt: Long = 0L
     private val poseIntervalMs: Long = 700L   // 0.7초마다 한 번씩 서버로 프레임 전송
@@ -43,6 +47,7 @@ class ExerciseExecutionActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         binding = ActivityExerciseExecutionBinding.inflate(layoutInflater)
         setContentView(binding.root)
+        binding.poseOverlay.setIsFrontCamera(true)
 
         cameraExecutor = Executors.newSingleThreadExecutor()
 
@@ -103,7 +108,15 @@ class ExerciseExecutionActivity : AppCompatActivity() {
                     it.setSurfaceProvider(binding.cameraPreview.surfaceProvider)
                 }
 
-            val cameraSelector = CameraSelector.DEFAULT_FRONT_CAMERA
+            var selector = CameraSelector.DEFAULT_FRONT_CAMERA
+
+            try {
+                if (!cameraProvider.hasCamera(CameraSelector.DEFAULT_FRONT_CAMERA)) {
+                    selector = CameraSelector.DEFAULT_BACK_CAMERA
+                }
+            } catch (e: Exception) {
+                selector = CameraSelector.DEFAULT_BACK_CAMERA
+            }
 
             // 분석용 ImageAnalysis
             val imageAnalyzer = ImageAnalysis.Builder()
@@ -118,7 +131,7 @@ class ExerciseExecutionActivity : AppCompatActivity() {
             try {
                 cameraProvider.unbindAll()
                 cameraProvider.bindToLifecycle(
-                    this, cameraSelector, preview, imageAnalyzer
+                    this, selector, preview, imageAnalyzer // cameraSelector -> selector 로 변경
                 )
             } catch (exc: Exception) {
                 Log.e("CameraX", "Use case binding failed", exc)
@@ -184,43 +197,75 @@ class ExerciseExecutionActivity : AppCompatActivity() {
     // 포즈 분석 → 서버 호출 파트
     // ============================
 
+    // 클래스 상단에 이미 있음:
+// private val poseIntervalMs: Long = 700L
+
+    // ✅ 동시에 여러 요청이 겹치지 않게 막기 위한 플래그
+    @Volatile
+    private var isPoseRequestRunning: Boolean = false
+
     private fun processImageForPose(imageProxy: ImageProxy) {
         val now = System.currentTimeMillis()
 
-        // 요청 너무 자주 보내지 않도록 간격 제한
+        // 너무 자주 보내지 않도록 (0.7초 간격)
         if (now - lastPoseSentAt < poseIntervalMs) {
             imageProxy.close()
             return
         }
         lastPoseSentAt = now
 
-        // ImageProxy → Bitmap 변환
+        // 이미 하나 보내는 중이면 이번 프레임은 버리기
+        if (isPoseRequestRunning) {
+            imageProxy.close()
+            return
+        }
+        isPoseRequestRunning = true
+
+        // ImageProxy → Bitmap
         val bitmap = imageProxy.toBitmap()
         imageProxy.close()
 
-        // 서버로 전송 (Retrofit + 코루틴)
-        lifecycleScope.launch {
+        // ✅ poseScope 사용 (lifecycleScope 말고)
+        poseScope.launch {
             try {
                 val base64 = bitmap.toBase64()
+
+                Log.d("POSE_API", "send frame to server")
+
                 val res = ApiClient.api.analyzePose(
                     PoseImageRequest(image_base64 = base64)
                 )
 
-                // UI 업데이트
-                runOnUiThread {
+                Log.d(
+                    "POSE_API",
+                    "recv: knee=${res.knee_angle}, hip=${res.hip_angle}, points=${res.keypoints?.size ?: 0}"
+                )
+
+                withContext(Dispatchers.Main) {
                     binding.tvFeedback.text = res.feedback
-                    // 필요하면 각도도 같이 표시 가능:
-                    // binding.tvAngle.text = "무릎: %.1f°, 엉덩이: %.1f°".format(res.knee_angle, res.hip_angle)
+
+                    val pts = res.keypoints
+                    if (pts != null && pts.isNotEmpty()) {
+                        Log.d("POSE_OVERLAY", "draw points: ${pts.size}")
+                        binding.poseOverlay.updatePose(pts)
+                    } else {
+                        Log.d("POSE_OVERLAY", "no points received")
+                    }
                 }
 
             } catch (e: Exception) {
-                Log.e("POSE_API", "Error: ${e.message}", e)
-                // 너무 자주 에러 메시지를 띄우면 시끄러우니 토스트는 생략하거나 디버그용으로만 사용
+                // ✅ 여기서 진짜 에러를 보고 싶음 (취소든 뭐든 다 찍기)
+                Log.e("POSE_API", "Error in pose request", e)
+            } finally {
+                isPoseRequestRunning = false
             }
         }
     }
 
+
+
     // ImageProxy → Bitmap 변환
+    // ImageProxy → Bitmap 변환 (회전 보정 포함)
     private fun ImageProxy.toBitmap(): Bitmap {
         val yBuffer = planes[0].buffer
         val uBuffer = planes[1].buffer
@@ -235,13 +280,32 @@ class ExerciseExecutionActivity : AppCompatActivity() {
         vBuffer.get(nv21, ySize, vSize)
         uBuffer.get(nv21, ySize + vSize, uSize)
 
+        // ★ sensor 기준으로 만들어진 원본 비트맵
         val yuvImage = YuvImage(nv21, ImageFormat.NV21, width, height, null)
         val out = ByteArrayOutputStream()
         yuvImage.compressToJpeg(Rect(0, 0, width, height), 75, out)
         val jpegBytes = out.toByteArray()
 
-        return BitmapFactory.decodeByteArray(jpegBytes, 0, jpegBytes.size)
+        val bitmap = BitmapFactory.decodeByteArray(jpegBytes, 0, jpegBytes.size)
+
+        // ★ CameraX가 알려주는 회전 각도만큼 돌려서 “화면이랑 같은 방향”으로 맞추기
+        val rotationDegrees = imageInfo.rotationDegrees.toFloat()
+        if (rotationDegrees == 0f) return bitmap
+
+        val matrix = Matrix().apply {
+            postRotate(rotationDegrees)
+        }
+
+        return Bitmap.createBitmap(
+            bitmap,
+            0, 0,
+            bitmap.width,
+            bitmap.height,
+            matrix,
+            true
+        )
     }
+
 
     // Bitmap → Base64 변환
     private fun Bitmap.toBase64(): String {
@@ -255,5 +319,7 @@ class ExerciseExecutionActivity : AppCompatActivity() {
         super.onDestroy()
         countDownTimer?.cancel()
         cameraExecutor.shutdown()
+        poseScope.cancel()   // ✅ 추가
     }
+
 }

@@ -17,6 +17,7 @@ data class SignupResponse(
     val message: String
 )
 
+
 data class LoginRequest(
     val email: String,
     val password: String
@@ -56,19 +57,54 @@ interface ApiService {
         @Body request: UserInfoRequest
     ): UserInfoResponse
 
-    // 🔥 **이 부분이 없으면 오류 발생**
     @POST("/pose/analyze")
-    suspend fun analyzePose(@Body body: PoseImageRequest): PoseImageResponse
+    suspend fun analyzePose(
+        @Body req: PoseImageRequest
+    ): PoseImageResponse
+
+    @POST("/facility/nearby") // <--- 경로를 복수형에서 단수형으로 수정했습니다.
+    suspend fun getNearbyFacilities(
+        @Body req: FacilityRequest
+    ): List<FacilityDto>
 }
+
+// ===================================
+// 포즈 분석 API 관련 데이터 클래스
+// ===================================
+
+data class PosePointDto(
+    val id: Int,
+    val x: Float,
+    val y: Float,
+    val score: Float
+)
 
 data class PoseImageRequest(
     val image_base64: String
 )
 
 data class PoseImageResponse(
+    val keypoints: List<PosePointDto>,
     val knee_angle: Float,
     val hip_angle: Float,
     val torso_tilt: Float,
     val feedback: String
 )
 
+// ===================================
+// 주변 시설 API 관련 데이터 클래스
+// ===================================
+
+data class FacilityRequest(
+    val user_lat: Double,
+    val user_lon: Double,
+    val radius_km: Double
+)
+
+data class FacilityDto(
+    val name: String,
+    val address: String,
+    val distance_km: Double,
+    val lat: Double,
+    val lon: Double
+)
